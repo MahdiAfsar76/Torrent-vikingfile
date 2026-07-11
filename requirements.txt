@@ -1,0 +1,11 @@
+# Torrent dependencies
+libtorrent
+
+# VikingFile upload dependencies
+requests
+
+# UI and utilities
+tqdm
+
+# Optional: For Google Colab
+# google-colab (automatically available in Colab)
