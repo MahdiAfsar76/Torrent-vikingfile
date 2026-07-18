@@ -75,3 +75,4 @@ class ConfigManager:
             logger.info(f"Configuration saved to {config_path}")
         except Exception as e:
             logger.error(f"Could not save config file: {e}")
+            
