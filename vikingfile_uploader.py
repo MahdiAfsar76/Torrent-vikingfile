@@ -320,3 +320,4 @@ def upload_to_vikingfile(local_path: str, remote_path: Optional[str] = None, **k
     results = uploader.upload_path(local_path, remote_path)
     uploader.print_summary(results)
     return results
+    
