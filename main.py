@@ -26,7 +26,7 @@ import argparse
 import os
 from pathlib import Path
 
-from torrent_downloader import download_torrent, get_download_status, clear_session, list_torrent_files
+from torrent_downloader import download_torrent, download_torrents, get_download_status, clear_session, list_torrent_files
 from config import ConfigManager, TORRENT_DOWNLOAD_PATH, VIKINGFILE_USER_HASH, get_logger
 
 logger = get_logger(__name__)
@@ -70,6 +70,12 @@ Examples:
   
   # Download and upload to VikingFile
   python main.py download -t "magnet:?xt=urn:btih:..." --upload -p "SeedUp/Movies"
+
+  # Download multiple torrents at once, in one shared session
+  python main.py download-multi -t "magnet:...one" -t "magnet:...two" --upload
+
+  # Same, with per-torrent file selection (line up with -t order; use "" to skip selection for a torrent)
+  python main.py download-multi -t "magnet:...one" -t "magnet:...two" -s "0,2" -s ""
   
   # Upload existing files to VikingFile
   python main.py upload -p /path/to/folder
@@ -146,6 +152,58 @@ config.py (VIKINGFILE_USER_HASH) unless --anonymous is passed.
         type=str,
         required=True,
         help='Torrent file path or magnet link'
+    )
+
+    # Download-multi command (concurrent multi-torrent download in one session)
+    multi_parser = subparsers.add_parser(
+        'download-multi',
+        help='Download multiple torrents concurrently in a single shared session'
+    )
+    multi_parser.add_argument(
+        '-t', '--torrent',
+        action='append',
+        required=True,
+        help='Torrent file path or magnet link. Repeat -t once per torrent.'
+    )
+    multi_parser.add_argument(
+        '-s', '--select-files',
+        action='append',
+        default=None,
+        help='File indices for the -t entry at the same position (e.g. "0,2,5" or "0-3,7"). '
+             'Use "" for a torrent you want downloaded in full. Optional — omit entirely to '
+             'download every file in every torrent.'
+    )
+    multi_parser.add_argument(
+        '-d', '--destination',
+        type=str,
+        default=TORRENT_DOWNLOAD_PATH,
+        help=f'Shared download destination; each torrent gets its own subfolder here (default: {TORRENT_DOWNLOAD_PATH})'
+    )
+    multi_parser.add_argument(
+        '--no-resume',
+        action='store_true',
+        help='Start fresh (ignore previous session)'
+    )
+    multi_parser.add_argument(
+        '--upload',
+        action='store_true',
+        help='Upload each torrent to VikingFile as soon as the whole batch finishes downloading'
+    )
+    multi_parser.add_argument(
+        '-p', '--path',
+        type=str,
+        help='Shared VikingFile destination base folder path. Each torrent uploads to '
+             '"<path>/<torrent name>" so they don\'t collide. Omit to auto-name each one.'
+    )
+    multi_parser.add_argument(
+        '--no-skip',
+        action='store_true',
+        help='Force re-upload even if a file with the same name exists remotely'
+    )
+    multi_parser.add_argument(
+        '--anonymous',
+        action='store_true',
+        help='Upload anonymously instead of using the configured user hash'
     )
 
     # Upload command
@@ -243,6 +301,96 @@ def handle_download(args):
             return 1
     
     return 0
+
+
+def handle_download_multi(args):
+    """Handle concurrent multi-torrent download command."""
+    print("="*60)
+    print("MULTI-TORRENT DOWNLOADER")
+    print("="*60)
+
+    sources = args.torrent
+    selections = args.select_files or []
+
+    file_indices_map = {}
+    for i, source in enumerate(sources):
+        raw = selections[i] if i < len(selections) else ""
+        if raw:
+            try:
+                file_indices_map[source] = parse_file_selection(raw)
+            except ValueError:
+                logger.error(
+                    f"Invalid --select-files value for torrent #{i} ({source[:40]}...): {raw!r} "
+                    "(expected comma-separated indices and/or ranges, e.g. '0,2,5-7')"
+                )
+                return 1
+
+    # If --upload is set, each torrent is uploaded to VikingFile the moment
+    # IT finishes, while the rest of the batch keeps downloading in the
+    # background — rather than waiting for the whole batch to complete first.
+    on_complete = None
+    upload_state = {"any_failed": False}
+
+    if args.upload:
+        try:
+            upload_to_vikingfile = get_uploader()
+        except Exception as e:
+            logger.error(f"Upload failed: {str(e)}")
+            return 1
+
+        user = "" if args.anonymous else VIKINGFILE_USER_HASH
+
+        def on_complete(source, downloaded_path):
+            name = os.path.basename(downloaded_path.rstrip(os.sep))
+            remote_path = f"{args.path}/{name}" if args.path else None
+            try:
+                upload_results = upload_to_vikingfile(
+                    downloaded_path,
+                    remote_path,
+                    user=user,
+                    skip_existing=not args.no_skip
+                )
+                if upload_results['failed']:
+                    upload_state["any_failed"] = True
+                    return f"⚠️ {name}: uploaded with some failures"
+                return f"📤 {name}: uploaded to VikingFile"
+            except Exception as e:
+                logger.error(f"Upload failed for '{downloaded_path}': {str(e)}")
+                upload_state["any_failed"] = True
+                return f"❌ {name}: upload error ({e})"
+
+    logger.info(f"Starting batch download of {len(sources)} torrent(s)")
+    results = download_torrents(
+        sources,
+        download_path=args.destination,
+        auto_resume=not args.no_resume,
+        file_indices_map=file_indices_map,
+        on_torrent_complete=on_complete
+    )
+
+    succeeded = {s: p for s, p in results.items() if p}
+    failed = [s for s, p in results.items() if not p]
+
+    print("\n" + "="*60)
+    print("BATCH DOWNLOAD SUMMARY")
+    print("="*60)
+    print(f"✅ {len(succeeded)} succeeded, ❌ {len(failed)} failed/incomplete")
+
+    if failed:
+        for s in failed:
+            print(f"   ❌ {s[:70]}")
+
+    if not succeeded:
+        logger.error("No torrents completed successfully")
+        return 1
+
+    if args.upload:
+        if upload_state["any_failed"]:
+            logger.warning("One or more uploads had failures — see log above")
+            return 1
+        logger.info("All uploads completed successfully!")
+
+    return 0 if not failed else 1
 
 
 def parse_file_selection(selection: str):
@@ -378,6 +526,8 @@ def main():
             return handle_download(args)
         elif args.command == 'files':
             return handle_files(args)
+        elif args.command == 'download-multi':
+            return handle_download_multi(args)
         elif args.command == 'upload':
             return handle_upload(args)
         elif args.command == 'status':
@@ -400,3 +550,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+            
