@@ -11,6 +11,8 @@ Perfect for users who need to download large files through torrents and automati
 ## Features
 
 - **High-speed torrent downloading** using libtorrent
+- **Selective file downloads** - pick specific files out of a multi-file torrent instead of grabbing everything
+- **Concurrent multi-torrent downloads** - download several torrents at once in one shared session, with combined progress tracking
 - **Automatic VikingFile upload** — no account login flow required, just a user hash
 - **Resume capability** for interrupted downloads
 - **Resilient multi-part uploads** for large files, with real-time progress bars
@@ -107,6 +109,18 @@ python main.py upload -p /path/to/folder -r "SeedUp/Movies"
 # Upload anonymously
 python main.py upload -p /path/to/folder --anonymous
 ```
+
+#### Download multiple torrents at once (single shared session, combined progress):
+```bash
+python main.py download-multi -t "magnet:...one" -t "magnet:...two" --upload
+
+# With per-torrent file selection (lines up with -t order; "" = download that one in full)
+python main.py download-multi -t "magnet:...one" -t "magnet:...two" -s "0,2" -s ""
+
+# Shared upload destination base — each torrent uploads to "<path>/<torrent name>"
+python main.py download-multi -t "magnet:...one" -t "magnet:...two" --upload -p "SeedUp/Batch"
+```
+All torrents in the batch share one libtorrent session (same shared disk/bandwidth Colab gives you either way), with a combined progress display and one shared resume session — if interrupted, re-running the same command picks up wherever each torrent left off.
 
 #### Check download status:
 ```bash
