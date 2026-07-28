@@ -33,7 +33,7 @@ from typing import Dict, List, Optional
 import requests
 from tqdm import tqdm
 
-from config import get_logger, VIKINGFILE_API_BASE, VIKINGFILE_USER_HASH, MAX_RETRIES, RETRY_DELAY
+from config import get_logger, VIKINGFILE_API_BASE, VIKINGFILE_USER_HASH, MAX_RETRIES, RETRY_DELAY, MAX_RETRY_DELAY
 
 logger = get_logger(__name__)
 logger.setLevel(__import__("logging").WARNING)
@@ -50,7 +50,7 @@ def _request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
         except Exception as e:
             last_exc = e
             if attempt < MAX_RETRIES:
-                delay = RETRY_DELAY * (2 ** (attempt - 1))
+                delay = min(RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
                 logger.warning(f"Request failed ({e}); retrying in {delay}s (attempt {attempt}/{MAX_RETRIES})")
                 time.sleep(delay)
     raise RuntimeError(f"Request to {url} failed after {MAX_RETRIES} attempts: {last_exc}")
@@ -179,7 +179,7 @@ class VikingFileUploader:
                     chunk = f.read(part_size)
                     if not chunk:
                         break
-                    resp = _request_with_retry("PUT", url, data=chunk)
+                    resp = _request_with_retry("PUT", url, data=chunk, timeout=600)
                     etag = resp.headers.get("ETag", "").strip('"')
                     parts.append({"PartNumber": part_number, "ETag": etag})
 
@@ -320,4 +320,4 @@ def upload_to_vikingfile(local_path: str, remote_path: Optional[str] = None, **k
     results = uploader.upload_path(local_path, remote_path)
     uploader.print_summary(results)
     return results
-    
+                         
