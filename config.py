@@ -33,8 +33,9 @@ VIKINGFILE_API_BASE = "https://vikingfile.com/api"
 # upload anonymously instead.
 VIKINGFILE_USER_HASH = "ndJCSIGAsT"
 
-MAX_RETRIES = 3
+MAX_RETRIES = 15
 RETRY_DELAY = 2  # seconds base delay for exponential backoff
+MAX_RETRY_DELAY = 60  # cap on the exponential backoff, regardless of attempt number
 LARGE_FILE_THRESHOLD = 1024 * 1024 * 1024  # 1GB
 PROGRESS_FILE = '.vikingfile_upload_progress.json'
 CONFIG_FILE = '.vikingfile-uploader.conf'
